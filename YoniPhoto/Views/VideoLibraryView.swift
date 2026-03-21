@@ -34,6 +34,9 @@ struct VideoLibraryView: View {
     @State private var showReanalyzeAlert = false
     @State private var analyzedSelectedCount = 0
     
+    // AI 剪辑
+    @State private var showEditView = false
+    
     private let columns = [
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2),
@@ -79,7 +82,11 @@ struct VideoLibraryView: View {
                         }
                 }
             }
-            .alert("部分视频已分析", isPresented: $showReanalyzeAlert) {
+        .sheet(isPresented: $showEditView) {
+            let selectedVideos = viewModel.allVideos.filter { viewModel.selectedVideoIds.contains($0.id) }
+            VideoEditView(selectedVideos: selectedVideos)
+        }
+        .alert("部分视频已分析", isPresented: $showReanalyzeAlert) {
                 Button("跳过已分析，仅分析未分析") {
                     viewModel.analyzeSelectedVideos(skipAnalyzed: true)
                 }
@@ -418,18 +425,18 @@ struct VideoLibraryView: View {
     // MARK: - 选择工具栏
     
     private var selectionToolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             Button("全选") { viewModel.selectAll() }
-                .font(.subheadline)
+                .font(.caption)
             Button("选未分析") { viewModel.selectUnanalyzed() }
-                .font(.subheadline)
+                .font(.caption)
             Spacer()
             Text("已选 \(viewModel.selectedVideoIds.count) 个")
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundColor(.secondary)
             
+            // 分析按钮
             Button {
-                // 检查是否有已分析的视频
                 let analyzedCount = viewModel.selectedVideoIds.filter { id in
                     viewModel.allVideos.first(where: { $0.id == id })?.isAnalyzed ?? false
                 }.count
@@ -440,11 +447,32 @@ struct VideoLibraryView: View {
                     viewModel.analyzeSelectedVideos(skipAnalyzed: true)
                 }
             } label: {
-                Label("分析", systemImage: "wand.and.stars")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                HStack(spacing: 3) {
+                    Image(systemName: "wand.and.stars").font(.caption)
+                    Text("分析").font(.caption).fontWeight(.semibold)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.selectedVideoIds.isEmpty)
+            
+            // 剪辑按钮
+            Button {
+                showEditView = true
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "scissors").font(.caption)
+                    Text("剪辑").font(.caption).fontWeight(.semibold)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.purple)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
             .disabled(viewModel.selectedVideoIds.isEmpty)
         }
         .padding(.horizontal, 12)

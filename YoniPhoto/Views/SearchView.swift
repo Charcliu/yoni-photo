@@ -19,6 +19,7 @@ struct SearchView: View {
     @StateObject private var viewModel = SearchViewModel()
     @State private var isSelectionMode = false
     @State private var layoutMode: SearchLayoutMode = .list
+    @State private var showEditView = false
     
     // 网格滑动选择状态
     @State private var isDragging = false
@@ -66,6 +67,10 @@ struct SearchView: View {
             .toolbar { toolbarContent }
             .sheet(isPresented: $viewModel.showAlbumNameInput) {
                 albumNameSheet
+            }
+            .sheet(isPresented: $showEditView) {
+                let selectedVideos = viewModel.searchResults.filter { viewModel.selectedVideoIds.contains($0.id) }
+                VideoEditView(selectedVideos: selectedVideos)
             }
             .overlay(alignment: .top) {
                 if let msg = viewModel.successMessage {
@@ -127,26 +132,48 @@ struct SearchView: View {
     // MARK: - 选择工具栏
     
     private var selectionToolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             Button("全选") { viewModel.selectAll() }
-                .font(.subheadline)
+                .font(.caption)
             Button("清空") { viewModel.clearSelection() }
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundColor(.red)
             Spacer()
             Text("已选 \(viewModel.selectedVideoIds.count) 个")
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundColor(.secondary)
             
+            // 加入相册按钮
             Button {
                 viewModel.loadExistingAlbums()
                 viewModel.showAlbumNameInput = true
             } label: {
-                Label("加入/创建相册", systemImage: "rectangle.stack.badge.plus")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                HStack(spacing: 3) {
+                    Image(systemName: "rectangle.stack.badge.plus").font(.caption)
+                    Text("相册").font(.caption).fontWeight(.semibold)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.selectedVideoIds.isEmpty)
+            
+            // 剪辑按钮
+            Button {
+                showEditView = true
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "scissors").font(.caption)
+                    Text("剪辑").font(.caption).fontWeight(.semibold)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.purple)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
             .disabled(viewModel.selectedVideoIds.isEmpty)
         }
         .padding(.horizontal, 12)
