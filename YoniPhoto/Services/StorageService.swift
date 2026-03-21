@@ -76,8 +76,17 @@ class StorageService {
         }
         let lowercasedQuery = query.lowercased()
         return getAllAnalyzedItems().filter { item in
-            guard let result = item.analysisResult else { return false }
-            return result.searchableText.lowercased().contains(lowercasedQuery)
+            // 按 AI 分析内容搜索
+            if let result = item.analysisResult,
+               result.searchableText.lowercased().contains(lowercasedQuery) {
+                return true
+            }
+            // 按拍摄地点搜索
+            if let locationName = item.locationName,
+               locationName.lowercased().contains(lowercasedQuery) {
+                return true
+            }
+            return false
         }
     }
     

@@ -11,8 +11,28 @@ import Photos
 
 struct VideoLibraryView: View {
     @StateObject private var viewModel = VideoLibraryViewModel()
-    @State private var showAPIKeyAlert = false
-    @State private var apiKeyInput = ""
+    
+    // 滑动选择状态
+    @State private var isDragging = false
+    @State private var dragSelectValue: Bool = true  // 拖动时是选中还是取消选中
+    @State private var dragStartIndex: Int? = nil    // 起始视频在 filteredVideos 中的索引
+    @State private var dragCurrentIndex: Int? = nil  // 当前手指所在视频的索引
+    @State private var dragPrevIndex: Int? = nil     // 上一帧手指所在视频的索引（用于往回滑动时取消选中）
+    
+    // 自动滚动
+    @State private var scrollProxy: ScrollViewProxy? = nil
+    @State private var autoScrollTimer: Timer? = nil
+    @State private var dragLocationInScroll: CGPoint = .zero  // 手指在 ScrollView 中的位置
+    @State private var scrollViewHeight: CGFloat = 0
+    
+    // 筛选模式
+    @State private var filterMode: FilterMode = .all
+    
+    enum FilterMode { case all, analyzed, unanalyzed }
+    
+    // 已分析视频重新分析弹窗
+    @State private var showReanalyzeAlert = false
+    @State private var analyzedSelectedCount = 0
     
     private let columns = [
         GridItem(.flexible(), spacing: 2),
@@ -41,16 +61,6 @@ struct VideoLibraryView: View {
                     analysisProgressBanner
                 }
             }
-            .alert("API Key 设置", isPresented: $showAPIKeyAlert) {
-                TextField("输入 Gemini API Key（AIza...）", text: $apiKeyInput)
-                    .autocorrectionDisabled()
-                Button("保存") {
-                    UserDefaults.standard.set(apiKeyInput, forKey: "gemini_api_key")
-                }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("请输入您的 Gemini API Key 以启用视频内容分析功能")
-            }
             .overlay(alignment: .top) {
                 if let msg = viewModel.successMessage {
                     ToastView(message: msg, type: .success)
@@ -69,15 +79,24 @@ struct VideoLibraryView: View {
                         }
                 }
             }
+            .alert("部分视频已分析", isPresented: $showReanalyzeAlert) {
+                Button("跳过已分析，仅分析未分析") {
+                    viewModel.analyzeSelectedVideos(skipAnalyzed: true)
+                }
+                Button("全部重新分析") {
+                    viewModel.analyzeSelectedVideos(skipAnalyzed: false)
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("已选视频中有 \(analyzedSelectedCount) 个已分析过，是否重新分析？")
+            }
         }
         .task {
-            // 仅在已授权时自动加载，权限请求由用户点击"授权访问"按钮主动触发
             if viewModel.authorizationStatus == .authorized || viewModel.authorizationStatus == .limited {
                 await viewModel.loadVideos()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // 用户从系统设置返回后，重新检测权限状态
             Task { await viewModel.refreshAuthorizationStatus() }
         }
     }
@@ -87,7 +106,7 @@ struct VideoLibraryView: View {
     @ViewBuilder
     private var mainContent: some View {
         VStack(spacing: 0) {
-            // 统计栏
+            // 统计栏（支持点击筛选）
             statsBar
             
             if viewModel.isLoading {
@@ -111,18 +130,234 @@ struct VideoLibraryView: View {
                 }
                 
                 // 视频网格
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 2) {
-                        ForEach(viewModel.allVideos) { video in
-                            VideoGridCell(
-                                video: video,
-                                isSelected: viewModel.selectedVideoIds.contains(video.id),
-                                isSelectionMode: viewModel.isSelectionMode
-                            ) {
-                                if viewModel.isSelectionMode {
-                                    viewModel.toggleSelection(for: video.id)
+                GeometryReader { geo in
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVGrid(columns: columns, spacing: 2) {
+                                ForEach(Array(filteredVideos.enumerated()), id: \.element.id) { index, video in
+                                    VideoGridCell(
+                                        video: video,
+                                        isSelected: viewModel.selectedVideoIds.contains(video.id),
+                                        isSelectionMode: viewModel.isSelectionMode,
+                                        isDragHighlighted: false
+                                    ) {
+                                        if viewModel.isSelectionMode {
+                                            viewModel.toggleSelection(for: video.id)
+                                        }
+                                    }
+                                    .id(video.id)
+                                    .background(
+                                        GeometryReader { cellGeo in
+                                            Color.clear
+                                                .preference(
+                                                    key: CellFramePreferenceKey.self,
+                                                    value: [CellFrameInfo(id: video.id, frame: cellGeo.frame(in: .named("gridSpace")))]
+                                                )
+                                        }
+                                    )
                                 }
                             }
+                            .coordinateSpace(name: "gridSpace")
+                            .gesture(
+                                viewModel.isSelectionMode ?
+                                DragGesture(minimumDistance: 5, coordinateSpace: .named("gridSpace"))
+                                    .onChanged { value in
+                                        // 记录手指在 ScrollView 坐标系中的位置（用于自动滚动判断）
+                                        dragLocationInScroll = value.location
+                                        
+                                        if !isDragging {
+                                            isDragging = true
+                                            // 找到起始视频的索引
+                                            if let startVideo = videoAt(location: value.startLocation),
+                                               let idx = filteredVideos.firstIndex(where: { $0.id == startVideo.id }) {
+                                                dragStartIndex = idx
+                                                dragCurrentIndex = idx
+                                                dragPrevIndex = idx
+                                                dragSelectValue = !viewModel.selectedVideoIds.contains(startVideo.id)
+                                            }
+                                            startAutoScroll(proxy: proxy, geo: geo)
+                                        }
+                                        
+                                        // 找到当前手指所在视频的索引
+                                        if let currentVideo = videoAt(location: value.location),
+                                           let idx = filteredVideos.firstIndex(where: { $0.id == currentVideo.id }) {
+                                            if idx != dragCurrentIndex {
+                                                dragPrevIndex = dragCurrentIndex
+                                                dragCurrentIndex = idx
+                                                applyRangeSelection()
+                                            }
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        isDragging = false
+                                        dragStartIndex = nil
+                                        dragCurrentIndex = nil
+                                        dragPrevIndex = nil
+                                        stopAutoScroll()
+                                    }
+                                : nil
+                            )
+                            .onPreferenceChange(CellFramePreferenceKey.self) { frames in
+                                viewModel.updateCellFrames(frames)
+                            }
+                        }
+                        .background(
+                            GeometryReader { scrollGeo in
+                                Color.clear.onAppear {
+                                    scrollViewHeight = scrollGeo.size.height
+                                    scrollProxy = proxy
+                                }
+                                .onChange(of: scrollGeo.size.height) { _, h in
+                                    scrollViewHeight = h
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    /// 当前筛选后的视频列表
+    private var filteredVideos: [VideoItem] {
+        switch filterMode {
+        case .all: return viewModel.allVideos
+        case .analyzed: return viewModel.allVideos.filter { $0.isAnalyzed }
+        case .unanalyzed: return viewModel.allVideos.filter { !$0.isAnalyzed }
+        }
+    }
+    
+    /// 根据坐标找到对应的视频（在 filteredVideos 中查找）
+    private func videoAt(location: CGPoint) -> VideoItem? {
+        guard let frame = viewModel.cellFrames.first(where: { $0.frame.contains(location) }) else { return nil }
+        return filteredVideos.first(where: { $0.id == frame.id })
+    }
+    
+    /// 苹果相册风格的区间选择：
+    /// - 起始行：从起始列到行尾全选
+    /// - 中间行：整行全选
+    /// - 当前行：从行首到当前列全选
+    /// - 往回滑动时，缩回范围外的视频自动取消选中
+    private func applyRangeSelection() {
+        guard let startIdx = dragStartIndex, let currentIdx = dragCurrentIndex else { return }
+        let colCount = 3
+        let videos = filteredVideos
+        
+        // 如果有上一帧位置，先把「缩回的范围」内的视频重置为未选中状态
+        if let prevIdx = dragPrevIndex, prevIdx != currentIdx {
+            let prevMin = min(startIdx, prevIdx)
+            let prevMax = max(startIdx, prevIdx)
+            let curMin = min(startIdx, currentIdx)
+            let curMax = max(startIdx, currentIdx)
+            
+            // 找出上一帧范围比当前范围多出来的部分（缩回的区域）
+            // 向下滑后往回：prevMax > curMax，需要清除 curMax+1 ~ prevMax
+            if prevMax > curMax {
+                for i in (curMax + 1)...prevMax {
+                    let id = videos[i].id
+                    if dragSelectValue { viewModel.selectedVideoIds.remove(id) }
+                    else { viewModel.selectedVideoIds.insert(id) }
+                }
+            }
+            // 向上滑后往回：prevMin < curMin，需要清除 prevMin ~ curMin-1
+            if prevMin < curMin {
+                for i in prevMin...(curMin - 1) {
+                    let id = videos[i].id
+                    if dragSelectValue { viewModel.selectedVideoIds.remove(id) }
+                    else { viewModel.selectedVideoIds.insert(id) }
+                }
+            }
+        }
+        
+        let minIdx = min(startIdx, currentIdx)
+        let maxIdx = max(startIdx, currentIdx)
+        let startRow = startIdx / colCount
+        let startCol = startIdx % colCount
+        let currentRow = currentIdx / colCount
+        let currentCol = currentIdx % colCount
+        
+        // 先将当前范围内所有视频重置（清除之前的选择再重新计算）
+        for i in minIdx...maxIdx {
+            let id = videos[i].id
+            if dragSelectValue {
+                viewModel.selectedVideoIds.remove(id)
+            } else {
+                viewModel.selectedVideoIds.insert(id)
+            }
+        }
+        
+        // 按苹果相册规则选中区间内的视频
+        let isForward = currentIdx >= startIdx  // 向下/向右滑动
+        
+        for i in minIdx...maxIdx {
+            let row = i / colCount
+            let col = i % colCount
+            var shouldSelect: Bool
+            
+            if startRow == currentRow {
+                // 同一行：选中起始列到当前列之间
+                let minCol = min(startCol, currentCol)
+                let maxCol = max(startCol, currentCol)
+                shouldSelect = col >= minCol && col <= maxCol
+            } else if row == startRow {
+                // 起始行
+                if isForward {
+                    shouldSelect = col >= startCol  // 从起始列到行尾
+                } else {
+                    shouldSelect = col <= startCol  // 从行首到起始列
+                }
+            } else if row == currentRow {
+                // 当前行
+                if isForward {
+                    shouldSelect = col <= currentCol  // 从行首到当前列
+                } else {
+                    shouldSelect = col >= currentCol  // 从当前列到行尾
+                }
+            } else {
+                // 中间行：整行全选
+                shouldSelect = true
+            }
+            
+            let id = videos[i].id
+            if shouldSelect {
+                if dragSelectValue {
+                    viewModel.selectedVideoIds.insert(id)
+                } else {
+                    viewModel.selectedVideoIds.remove(id)
+                }
+            }
+        }
+    }
+    
+    // MARK: - 自动滚动
+    
+    private func startAutoScroll(proxy: ScrollViewProxy, geo: GeometryProxy) {
+        stopAutoScroll()
+        scrollProxy = proxy
+        scrollViewHeight = geo.size.height
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            DispatchQueue.main.async {
+                guard isDragging else { return }
+                let threshold: CGFloat = 80  // 距离边缘多少像素触发滚动
+                let y = dragLocationInScroll.y
+                
+                // 接近底部：向下滚动到下一个视频
+                if y > scrollViewHeight - threshold {
+                    if let currentIdx = dragCurrentIndex {
+                        let nextIdx = min(currentIdx + 3, filteredVideos.count - 1)
+                        let nextId = filteredVideos[nextIdx].id
+                        withAnimation(.linear(duration: 0.1)) {
+                            proxy.scrollTo(nextId, anchor: .bottom)
+                        }
+                    }
+                }
+                // 接近顶部：向上滚动到上一个视频
+                else if y < threshold {
+                    if let currentIdx = dragCurrentIndex {
+                        let prevIdx = max(currentIdx - 3, 0)
+                        let prevId = filteredVideos[prevIdx].id
+                        withAnimation(.linear(duration: 0.1)) {
+                            proxy.scrollTo(prevId, anchor: .top)
                         }
                     }
                 }
@@ -130,15 +365,20 @@ struct VideoLibraryView: View {
         }
     }
     
+    private func stopAutoScroll() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+    }
+    
     // MARK: - 统计栏
     
     private var statsBar: some View {
-        HStack(spacing: 16) {
-            StatItem(value: viewModel.totalCount, label: "全部", color: .primary)
+        HStack(spacing: 0) {
+            filterStatButton(value: viewModel.totalCount, label: "全部", color: .primary, mode: .all)
             Divider().frame(height: 20)
-            StatItem(value: viewModel.analyzedCount, label: "已分析", color: .green)
+            filterStatButton(value: viewModel.analyzedCount, label: "已分析", color: .green, mode: .analyzed)
             Divider().frame(height: 20)
-            StatItem(value: viewModel.unanalyzedCount, label: "未分析", color: .orange)
+            filterStatButton(value: viewModel.unanalyzedCount, label: "未分析", color: .orange, mode: .unanalyzed)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -146,6 +386,33 @@ struct VideoLibraryView: View {
         .overlay(alignment: .bottom) {
             Divider()
         }
+    }
+    
+    @ViewBuilder
+    private func filterStatButton(value: Int, label: String, color: Color, mode: FilterMode) -> some View {
+        let isActive = filterMode == mode
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                filterMode = (filterMode == mode) ? .all : mode
+            }
+        } label: {
+            VStack(spacing: 2) {
+                Text("\(value)")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(isActive ? color : color.opacity(0.7))
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(isActive ? color : .secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isActive ? color.opacity(0.12) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
     }
     
     // MARK: - 选择工具栏
@@ -162,7 +429,16 @@ struct VideoLibraryView: View {
                 .foregroundColor(.secondary)
             
             Button {
-                viewModel.analyzeSelectedVideos()
+                // 检查是否有已分析的视频
+                let analyzedCount = viewModel.selectedVideoIds.filter { id in
+                    viewModel.allVideos.first(where: { $0.id == id })?.isAnalyzed ?? false
+                }.count
+                if analyzedCount > 0 {
+                    analyzedSelectedCount = analyzedCount
+                    showReanalyzeAlert = true
+                } else {
+                    viewModel.analyzeSelectedVideos(skipAnalyzed: true)
+                }
             } label: {
                 Label("分析", systemImage: "wand.and.stars")
                     .font(.subheadline)
@@ -206,15 +482,6 @@ struct VideoLibraryView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {
-                showAPIKeyAlert = true
-                apiKeyInput = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
-            } label: {
-                Image(systemName: "key")
-            }
-        }
-        
         ToolbarItem(placement: .topBarTrailing) {
             if viewModel.isSelectionMode {
                 Button("完成") {
@@ -255,10 +522,8 @@ struct VideoLibraryView: View {
                 .multilineTextAlignment(.center)
             Button("授权访问") {
                 if viewModel.authorizationStatus == .notDetermined {
-                    // 首次请求：弹出系统授权弹窗
                     Task { await viewModel.requestPermissionAndLoad() }
                 } else {
-                    // 已拒绝或受限：跳转系统设置
                     if let url = URL(string: UIApplication.openSettingsURLString) {
                         UIApplication.shared.open(url)
                     }
@@ -292,12 +557,27 @@ struct VideoLibraryView: View {
     }
 }
 
+// MARK: - 单元格坐标 Preference
+
+struct CellFrameInfo: Equatable {
+    let id: String
+    let frame: CGRect
+}
+
+struct CellFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [CellFrameInfo] = []
+    static func reduce(value: inout [CellFrameInfo], nextValue: () -> [CellFrameInfo]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
 // MARK: - 视频网格单元格
 
 struct VideoGridCell: View {
     let video: VideoItem
     let isSelected: Bool
     let isSelectionMode: Bool
+    let isDragHighlighted: Bool
     let onTap: () -> Void
     
     private let cellSize: CGFloat = (UIScreen.main.bounds.width - 4) / 3
@@ -328,26 +608,28 @@ struct VideoGridCell: View {
                 if isSelectionMode { onTap() }
             }
             
-            // 分析状态指示
-            if video.analysisStatus == .completed {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.green)
-                    .background(Color.white.clipShape(Circle()))
-                    .padding(4)
-            } else if video.analysisStatus == .analyzing {
-                ProgressView()
-                    .scaleEffect(0.7)
-                    .padding(6)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-                    .padding(4)
-            } else if video.analysisStatus == .failed {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.red)
-                    .background(Color.white.clipShape(Circle()))
-                    .padding(4)
+            // 分析状态指示（选择模式下隐藏）
+            if !isSelectionMode {
+                if video.analysisStatus == .completed {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.green)
+                        .background(Color.white.clipShape(Circle()))
+                        .padding(4)
+                } else if video.analysisStatus == .analyzing {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .padding(6)
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                        .padding(4)
+                } else if video.analysisStatus == .failed {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.red)
+                        .background(Color.white.clipShape(Circle()))
+                        .padding(4)
+                }
             }
             
             // 选中遮罩
@@ -368,6 +650,7 @@ struct VideoGridCell: View {
         .onTapGesture {
             if isSelectionMode { onTap() }
         }
+        .animation(.easeInOut(duration: 0.15), value: isSelected)
     }
 }
 

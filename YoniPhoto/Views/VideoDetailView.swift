@@ -8,27 +8,56 @@
 
 import SwiftUI
 import Photos
+import AVKit
+import AVFoundation
+import CoreLocation
+import MapKit
+
+// 视频原始元数据
+struct VideoRawMetadata {
+    var locationName: String?       // 反地理编码地名
+    var coordinate: CLLocationCoordinate2D?
+    var cameraMake: String?         // 相机品牌
+    var cameraModel: String?        // 相机型号
+    var lensModel: String?          // 镜头型号
+    var focalLength: String?        // 焦距
+    var aperture: String?           // 光圈
+    var iso: String?                // ISO
+}
 
 struct VideoDetailView: View {
     let video: VideoItem
     @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var isLoadingPlayer = true
+    @State private var rawMetadata: VideoRawMetadata?
+    @State private var isLoadingMetadata = true
     
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // 封面图
-                VideoThumbnailView(assetId: video.id, size: CGSize(width: UIScreen.main.bounds.width, height: 240))
-                    .overlay(alignment: .bottomTrailing) {
-                        Text(formatDuration(video.duration))
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Capsule())
-                            .padding(10)
+                // 视频播放器
+                ZStack {
+                    Color.black
+                        .frame(height: 240)
+                    
+                    if let player = player {
+                        VideoPlayer(player: player)
+                            .frame(height: 240)
+                    } else if isLoadingPlayer {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(height: 240)
                     }
+                }
+                .frame(height: 240)
+                .onAppear {
+                    loadPlayer()
+                    loadMetadata()
+                }
+                .onDisappear {
+                    player?.pause()
+                }
                 
                 VStack(alignment: .leading, spacing: 16) {
                     // 基本信息
@@ -99,8 +128,13 @@ struct VideoDetailView: View {
                                 .padding(.top, 8)
                         }
                         
+                        Divider()
+                        
+                        // 原始信息
+                        rawInfoSection
+                        
                     } else {
-                        // 未分析状态
+                    // 未分析状态
                         VStack(spacing: 12) {
                             Image(systemName: "wand.and.stars")
                                 .font(.system(size: 48))
@@ -115,6 +149,11 @@ struct VideoDetailView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
+                        
+                        Divider()
+                        
+                        // 原始信息（未分析时也显示）
+                        rawInfoSection
                     }
                 }
                 .padding(16)
@@ -122,6 +161,235 @@ struct VideoDetailView: View {
         }
         .navigationTitle("视频详情")
         .navigationBarTitleDisplayMode(.inline)
+    }
+    
+    // MARK: - 私有方法
+    
+    private func loadPlayer() {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [video.id], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            isLoadingPlayer = false
+            return
+        }
+        
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .automatic
+        
+        PHImageManager.default().requestPlayerItem(forVideo: asset, options: options) { playerItem, _ in
+            DispatchQueue.main.async {
+                if let playerItem = playerItem {
+                    self.player = AVPlayer(playerItem: playerItem)
+                }
+                self.isLoadingPlayer = false
+            }
+        }
+    }
+    
+    // MARK: - 原始信息视图
+    
+    @ViewBuilder
+    private var rawInfoSection: some View {
+        InfoSection(title: "原始信息", icon: "camera") {
+            if isLoadingMetadata {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("读取元数据...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    // 拍摄时间
+                    if let date = video.creationDate {
+                        DetailRow(
+                            label: "拍摄时间",
+                            value: formatCreationDate(date),
+                            icon: "calendar"
+                        )
+                    }
+                    
+                    // 视频时长
+                    DetailRow(
+                        label: "时长",
+                        value: formatDuration(video.duration),
+                        icon: "clock"
+                    )
+                    
+                    // 拍摄地点
+                    if let locationName = rawMetadata?.locationName {
+                        DetailRow(label: "拍摄地点", value: locationName, icon: "location")
+                    }
+                    
+                    // 相机品牌/型号
+                    if let make = rawMetadata?.cameraMake, let model = rawMetadata?.cameraModel {
+                        let device = make == model || model.hasPrefix(make) ? model : "\(make) \(model)"
+                        DetailRow(label: "拍摄设备", value: device, icon: "iphone")
+                    } else if let model = rawMetadata?.cameraModel {
+                        DetailRow(label: "拍摄设备", value: model, icon: "iphone")
+                    }
+                    
+                    // 镜头型号
+                    if let lens = rawMetadata?.lensModel {
+                        DetailRow(label: "镜头", value: lens, icon: "camera.aperture")
+                    }
+                    
+                    // 焦距
+                    if let focal = rawMetadata?.focalLength {
+                        DetailRow(label: "焦距", value: focal, icon: "scope")
+                    }
+                    
+                    // 光圈
+                    if let aperture = rawMetadata?.aperture {
+                        DetailRow(label: "光圈", value: aperture, icon: "camera.filters")
+                    }
+                    
+                    // ISO
+                    if let iso = rawMetadata?.iso {
+                        DetailRow(label: "ISO", value: iso, icon: "sun.max")
+                    }
+                    
+                    // 文件名
+                    DetailRow(label: "文件名", value: video.filename, icon: "doc")
+                }
+            }
+        }
+    }
+    
+    // MARK: - 加载元数据
+    
+    private func loadMetadata() {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [video.id], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            isLoadingMetadata = false
+            return
+        }
+        
+        var metadata = VideoRawMetadata()
+        
+        // 读取地理位置
+        if let location = asset.location {
+            metadata.coordinate = location.coordinate
+            let geocoder = CLGeocoder()
+            geocoder.reverseGeocodeLocation(location) { placemarks, _ in
+                DispatchQueue.main.async {
+                    if let placemark = placemarks?.first {
+                        var parts: [String] = []
+                        if let country = placemark.country { parts.append(country) }
+                        if let adminArea = placemark.administrativeArea { parts.append(adminArea) }
+                        if let locality = placemark.locality { parts.append(locality) }
+                        if let subLocality = placemark.subLocality { parts.append(subLocality) }
+                        metadata.locationName = parts.isEmpty ? nil : parts.joined(separator: " · ")
+                    }
+                    self.rawMetadata = metadata
+                    self.isLoadingMetadata = false
+                }
+            }
+        } else {
+            // 无位置信息，直接读取 AVAsset metadata
+            loadAVMetadata(asset: asset, metadata: metadata)
+        }
+    }
+    
+    private func loadAVMetadata(asset: PHAsset, metadata: VideoRawMetadata) {
+        var meta = metadata
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .fastFormat
+        
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+            guard let avAsset = avAsset else {
+                DispatchQueue.main.async {
+                    self.rawMetadata = meta
+                    self.isLoadingMetadata = false
+                }
+                return
+            }
+            
+            // 读取所有 metadata
+            let allMetadata = avAsset.metadata
+            
+            for item in allMetadata {
+                guard let key = item.commonKey?.rawValue else { continue }
+                switch key {
+                case AVMetadataKey.commonKeyMake.rawValue:
+                    meta.cameraMake = item.stringValue
+                case AVMetadataKey.commonKeyModel.rawValue:
+                    meta.cameraModel = item.stringValue
+                case AVMetadataKey.commonKeySoftware.rawValue:
+                    break
+                default:
+                    break
+                }
+            }
+            
+            // 尝试读取 iOS 格式的 metadata（QuickTime）
+            let qtMetadata = AVMetadataItem.metadataItems(from: allMetadata, filteredByIdentifier: .quickTimeMetadataModel)
+            if let modelItem = qtMetadata.first, meta.cameraModel == nil {
+                meta.cameraModel = modelItem.stringValue
+            }
+            
+            let makeItems = AVMetadataItem.metadataItems(from: allMetadata, filteredByIdentifier: .quickTimeMetadataMake)
+            if let makeItem = makeItems.first, meta.cameraMake == nil {
+                meta.cameraMake = makeItem.stringValue
+            }
+            
+            // 读取 EXIF 数据（部分视频格式支持）
+            for format in avAsset.availableMetadataFormats {
+                let formatMetadata = avAsset.metadata(forFormat: format)
+                for item in formatMetadata {
+                    if let identifier = item.identifier?.rawValue {
+                        if identifier.contains("lens") || identifier.contains("Lens") {
+                            if let val = item.stringValue, !val.isEmpty {
+                                meta.lensModel = val
+                            }
+                        }
+                        if identifier.contains("FocalLength") || identifier.contains("focalLength") {
+                            if let val = item.numberValue {
+                                meta.focalLength = "\(val)mm"
+                            }
+                        }
+                        if identifier.contains("FNumber") || identifier.contains("aperture") {
+                            if let val = item.numberValue {
+                                meta.aperture = "f/\(val)"
+                            }
+                        }
+                        if identifier.contains("ISO") || identifier.contains("iso") {
+                            if let val = item.numberValue {
+                                meta.iso = "\(val)"
+                            }
+                        }
+                    }
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.rawMetadata = meta
+                self.isLoadingMetadata = false
+            }
+        }
+    }
+    
+    // MARK: - 格式化工具
+    
+    private func formatCreationDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy年MM月dd日 HH:mm"
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter.string(from: date)
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = Int(duration)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%d:%02d", minutes, seconds)
+        }
     }
 }
 
@@ -154,14 +422,19 @@ struct DetailRow: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(width: 16)
+                .padding(.top, 2)
             Text(label)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-                .frame(width: 40, alignment: .leading)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: 56, alignment: .leading)
             Text(value.isEmpty ? "—" : value)
                 .font(.subheadline)
                 .foregroundColor(.primary)
-            Spacer()
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
         }
     }
 }

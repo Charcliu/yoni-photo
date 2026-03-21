@@ -28,6 +28,7 @@ struct VideoItem: Identifiable, Codable {
     var analysisStatus: AnalysisStatus
     var analysisResult: VideoAnalysisResult?
     var analysisDate: Date?
+    var locationName: String?   // 反地理编码地名（国家·省·市·区）
     
     // 是否已分析
     var isAnalyzed: Bool {
@@ -43,6 +44,7 @@ struct VideoItem: Identifiable, Codable {
         self.analysisStatus = .notAnalyzed
         self.analysisResult = nil
         self.analysisDate = nil
+        self.locationName = nil
     }
 }
 

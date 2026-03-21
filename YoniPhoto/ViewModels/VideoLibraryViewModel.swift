@@ -10,6 +10,7 @@ import Foundation
 import Photos
 import SwiftUI
 import Combine
+import CoreLocation
 
 @MainActor
 class VideoLibraryViewModel: ObservableObject {
@@ -17,6 +18,7 @@ class VideoLibraryViewModel: ObservableObject {
     // MARK: - Published 属性
     
     @Published var allVideos: [VideoItem] = []
+    @Published var searchText: String = ""
     @Published var isLoading = false
     @Published var isAnalyzing = false
     @Published var analysisProgress: Double = 0
@@ -26,6 +28,29 @@ class VideoLibraryViewModel: ObservableObject {
     @Published var selectedVideoIds: Set<String> = []
     @Published var isSelectionMode = false
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
+    
+    // 滑动选择用：记录每个单元格的坐标
+    var cellFrames: [CellFrameInfo] = []
+    
+    func updateCellFrames(_ frames: [CellFrameInfo]) {
+        cellFrames = frames
+    }
+    
+    // 搜索过滤结果
+    var filteredVideos: [VideoItem] {
+        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return allVideos }
+        let lower = trimmed.lowercased()
+        return allVideos.filter { video in
+            // 按地点搜索
+            if let loc = video.locationName, loc.lowercased().contains(lower) { return true }
+            // 按 AI 分析内容搜索
+            if let result = video.analysisResult, result.searchableText.lowercased().contains(lower) { return true }
+            // 按文件名搜索
+            if video.filename.lowercased().contains(lower) { return true }
+            return false
+        }
+    }
     
     // 分析队列控制
     private var analysisTask: Task<Void, Never>?
@@ -80,6 +105,45 @@ class VideoLibraryViewModel: ObservableObject {
         }
         
         allVideos = items
+        
+        // 异步为没有地点信息的视频反地理编码
+        Task { await resolveLocationsIfNeeded(for: assets) }
+    }
+    
+    // MARK: - 地点反地理编码
+    
+    private func resolveLocationsIfNeeded(for assets: [PHAsset]) async {
+        let geocoder = CLGeocoder()
+        for asset in assets {
+            guard let location = asset.location else { continue }
+            // 已有地点信息则跳过
+            if let existing = StorageService.shared.getVideoItem(for: asset.localIdentifier),
+               existing.locationName != nil { continue }
+            
+            do {
+                let placemarks = try await geocoder.reverseGeocodeLocation(location)
+                if let placemark = placemarks.first {
+                    var parts: [String] = []
+                    if let country = placemark.country { parts.append(country) }
+                    if let adminArea = placemark.administrativeArea { parts.append(adminArea) }
+                    if let locality = placemark.locality { parts.append(locality) }
+                    if let subLocality = placemark.subLocality { parts.append(subLocality) }
+                    let locationName = parts.isEmpty ? nil : parts.joined(separator: " · ")
+                    updateLocationName(assetId: asset.localIdentifier, locationName: locationName)
+                }
+            } catch {
+                // 反地理编码失败，忽略
+            }
+            // 避免频繁请求 geocoder（苹果限制每秒1次）
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+        }
+    }
+    
+    private func updateLocationName(assetId: String, locationName: String?) {
+        if let index = allVideos.firstIndex(where: { $0.id == assetId }) {
+            allVideos[index].locationName = locationName
+            StorageService.shared.saveVideoItem(allVideos[index])
+        }
     }
     
     // MARK: - 选择模式
@@ -109,14 +173,19 @@ class VideoLibraryViewModel: ObservableObject {
     
     // MARK: - 批量分析
     
-    func analyzeSelectedVideos() {
+    func analyzeSelectedVideos(skipAnalyzed: Bool = true) {
         guard !selectedVideoIds.isEmpty else {
             errorMessage = "请先选择要分析的视频"
             return
         }
         
-        let idsToAnalyze = selectedVideoIds.filter { id in
-            !(allVideos.first(where: { $0.id == id })?.isAnalyzed ?? false)
+        let idsToAnalyze: [String]
+        if skipAnalyzed {
+            idsToAnalyze = selectedVideoIds.filter { id in
+                !(allVideos.first(where: { $0.id == id })?.isAnalyzed ?? false)
+            }
+        } else {
+            idsToAnalyze = Array(selectedVideoIds)
         }
         
         if idsToAnalyze.isEmpty {
@@ -125,7 +194,7 @@ class VideoLibraryViewModel: ObservableObject {
         }
         
         analysisTask = Task {
-            await performAnalysis(for: Array(idsToAnalyze))
+            await performAnalysis(for: idsToAnalyze)
         }
     }
     
