@@ -27,37 +27,61 @@ class VideoAnalysisService {
     // MARK: - 主分析入口
     
     func analyzeVideo(asset: PHAsset) async throws -> VideoAnalysisResult {
-        // 提取视频帧
-        let frames = await PhotoLibraryService.shared.extractFrames(from: asset, count: 3)
-        guard !frames.isEmpty else {
-            throw AnalysisError.frameExtractionFailed
+        if asset.mediaType == .image {
+            // 图片分析：直接提取图片
+            let frames = await PhotoLibraryService.shared.extractPhotoImage(from: asset)
+            guard !frames.isEmpty else {
+                throw AnalysisError.frameExtractionFailed
+            }
+            return try await analyzeFrames(frames, duration: 0, isPhoto: true)
+        } else {
+            // 视频分析：提取视频帧
+            let frames = await PhotoLibraryService.shared.extractFrames(from: asset, count: 3)
+            guard !frames.isEmpty else {
+                throw AnalysisError.frameExtractionFailed
+            }
+            return try await analyzeFrames(frames, duration: asset.duration)
         }
-        
-        // 调用AI分析
-        return try await analyzeFrames(frames, duration: asset.duration)
     }
     
     // MARK: - AI分析帧
     
-    private func analyzeFrames(_ images: [UIImage], duration: TimeInterval) async throws -> VideoAnalysisResult {
+    private func analyzeFrames(_ images: [UIImage], duration: TimeInterval, isPhoto: Bool = false) async throws -> VideoAnalysisResult {
         guard !apiKey.isEmpty else {
             throw AnalysisError.apiKeyMissing
         }
         
-        let durationText = formatDuration(duration)
-        let prompt = """
-        请分析这段视频的截图（共\(images.count)帧，视频时长约\(durationText)），用中文回答，严格按照以下JSON格式返回，不要有任何其他文字：
-        {
-          "title": "简短的视频标题（10字以内）",
-          "summary": "视频内容摘要（50字以内）",
-          "tags": ["标签1", "标签2", "标签3"],
-          "scene": "场景描述（如：室内/室外/自然风景/城市街道等）",
-          "people": "人物描述（如：无人/一人/多人/儿童/成人等）",
-          "activity": "活动描述（如：运动/聚餐/旅游/日常生活等）",
-          "mood": "情绪氛围（如：欢乐/温馨/激烈/平静等）",
-          "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"]
+        let prompt: String
+        if isPhoto {
+            prompt = """
+            请分析这张图片，用中文回答，严格按照以下JSON格式返回，不要有任何其他文字：
+            {
+              "title": "简短的图片标题（10字以内）",
+              "summary": "图片内容摘要（50字以内）",
+              "tags": ["标签1", "标签2", "标签3"],
+              "scene": "场景描述（如：室内/室外/自然风景/城市街道等）",
+              "people": "人物描述（如：无人/一人/多人/儿童/成人等）",
+              "activity": "活动描述（如：运动/聚餐/旅游/日常生活等）",
+              "mood": "情绪氛围（如：欢乐/温馨/激烈/平静等）",
+              "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"]
+            }
+            """
+        } else {
+            let durationText = formatDuration(duration)
+            prompt = """
+            请分析这段视频的截图（共\(images.count)帧，视频时长约\(durationText)），用中文回答，严格按照以下JSON格式返回，不要有任何其他文字：
+            {
+              "title": "简短的视频标题（10字以内）",
+              "summary": "视频内容摘要（50字以内）",
+              "tags": ["标签1", "标签2", "标签3"],
+              "scene": "场景描述（如：室内/室外/自然风景/城市街道等）",
+              "people": "人物描述（如：无人/一人/多人/儿童/成人等）",
+              "activity": "活动描述（如：运动/聚餐/旅游/日常生活等）",
+              "mood": "情绪氛围（如：欢乐/温馨/激烈/平静等）",
+              "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"]
+            }
+            """
         }
-        """
         
         // 构建通义千问消息内容（OpenAI 兼容格式，支持多图）
         var contentItems: [[String: Any]] = [

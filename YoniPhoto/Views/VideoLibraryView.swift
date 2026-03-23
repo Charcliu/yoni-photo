@@ -57,7 +57,7 @@ struct VideoLibraryView: View {
                     requestPermissionView
                 }
             }
-            .navigationTitle("视频库")
+            .navigationTitle("图库")
             .toolbar { toolbarContent }
             .overlay(alignment: .bottom) {
                 if viewModel.isAnalyzing {
@@ -86,7 +86,7 @@ struct VideoLibraryView: View {
             let selectedVideos = viewModel.allVideos.filter { viewModel.selectedVideoIds.contains($0.id) }
             VideoEditView(selectedVideos: selectedVideos)
         }
-        .alert("部分视频已分析", isPresented: $showReanalyzeAlert) {
+        .alert("部分媒体已分析", isPresented: $showReanalyzeAlert) {
                 Button("跳过已分析，仅分析未分析") {
                     viewModel.analyzeSelectedVideos(skipAnalyzed: true)
                 }
@@ -95,7 +95,7 @@ struct VideoLibraryView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("已选视频中有 \(analyzedSelectedCount) 个已分析过，是否重新分析？")
+                Text("已选媒体中有 \(analyzedSelectedCount) 个已分析过，是否重新分析？")
             }
         }
         .task {
@@ -118,15 +118,15 @@ struct VideoLibraryView: View {
             
             if viewModel.isLoading {
                 Spacer()
-                ProgressView("加载视频中...")
+                ProgressView("加载媒体中...")
                 Spacer()
             } else if viewModel.allVideos.isEmpty {
                 Spacer()
                 VStack(spacing: 12) {
-                    Image(systemName: "video.slash")
+                    Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
-                    Text("相册中没有视频")
+                    Text("相册中没有媒体")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
@@ -545,7 +545,7 @@ struct VideoLibraryView: View {
             Text("需要相册访问权限")
                 .font(.title2)
                 .fontWeight(.bold)
-            Text("请允许访问相册以读取和分析您的视频")
+            Text("请允许访问相册以读取和分析您的图片和视频")
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("授权访问") {
@@ -616,16 +616,28 @@ struct VideoGridCell: View {
                 ZStack(alignment: .bottomLeading) {
                     VideoThumbnailView(assetId: video.id, size: CGSize(width: cellSize, height: cellSize))
                     
-                    // 时长标签
-                    Text(formatDuration(video.duration))
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.6))
-                        .clipShape(Capsule())
-                        .padding(4)
+                    // 视频显示时长标签，图片显示图片图标
+                    if video.mediaType == .video {
+                        Text(formatDuration(video.duration))
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Capsule())
+                            .padding(4)
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Capsule())
+                            .padding(4)
+                    }
                 }
             }
             .simultaneousGesture(TapGesture().onEnded {

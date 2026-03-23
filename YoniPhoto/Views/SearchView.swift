@@ -63,7 +63,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .navigationTitle("搜索视频")
+            .navigationTitle("搜索媒体")
             .toolbar { toolbarContent }
             .sheet(isPresented: $viewModel.showAlbumNameInput) {
                 albumNameSheet
@@ -406,17 +406,17 @@ struct SearchView: View {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 56))
                     .foregroundColor(.secondary)
-                Text("暂无已分析的视频")
+                    Text("暂无已分析的媒体")
                     .font(.headline)
                     .foregroundColor(.secondary)
-                Text("前往「视频库」选择视频进行分析")
+                    Text("前往「图库」选择媒体进行分析")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 56))
                     .foregroundColor(.secondary)
-                Text("没有找到相关视频")
+                    Text("没有找到相关媒体")
                     .font(.headline)
                     .foregroundColor(.secondary)
                 Text("尝试其他关键词，如：旅游、聚餐、运动...")
@@ -586,14 +586,25 @@ struct SearchResultRow: View {
             VideoThumbnailView(assetId: video.id, size: CGSize(width: 64, height: 64))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(alignment: .bottomTrailing) {
-                    Text(formatDuration(video.duration))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.65))
-                        .clipShape(Capsule())
-                        .padding(3)
+                    if video.mediaType == .video {
+                        Text(formatDuration(video.duration))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.65))
+                            .clipShape(Capsule())
+                            .padding(3)
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.65))
+                            .clipShape(Capsule())
+                            .padding(3)
+                    }
                 }
             
             // 信息
@@ -692,18 +703,29 @@ struct SearchGridCell: View {
                     .frame(width: cellSize, height: cellSize * 0.75)
                     .clipped()
                 
-                // 时长标签（左下角）
+                // 时长/类型标签（左下角）
                 VStack {
                     Spacer()
                     HStack {
-                        Text(formatDuration(video.duration))
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Capsule())
-                            .padding(4)
+                        if video.mediaType == .video {
+                            Text(formatDuration(video.duration))
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Capsule())
+                                .padding(4)
+                        } else {
+                            Image(systemName: "photo")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Capsule())
+                                .padding(4)
+                        }
                         Spacer()
                     }
                 }

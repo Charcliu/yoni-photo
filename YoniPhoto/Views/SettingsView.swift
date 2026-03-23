@@ -10,12 +10,57 @@ import SwiftUI
 
 struct SettingsView: View {
     @State private var apiKey = UserDefaults.standard.string(forKey: "qwen_api_key") ?? ""
+    @State private var jiMengAccessKeyId = UserDefaults.standard.string(forKey: "jimeng_access_key_id") ?? ""
+    @State private var jiMengSecretAccessKey = UserDefaults.standard.string(forKey: "jimeng_secret_access_key") ?? ""
     @State private var showClearConfirm = false
     @State private var showSavedToast = false
     
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Access Key ID
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Access Key ID", systemImage: "person.badge.key")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            TextField("输入 Access Key ID", text: $jiMengAccessKeyId)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .font(.system(.body, design: .monospaced))
+                        }
+
+                        // Secret Access Key
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Secret Access Key", systemImage: "lock.fill")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            SecureField("输入 Secret Access Key", text: $jiMengSecretAccessKey)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .font(.system(.body, design: .monospaced))
+                        }
+
+                        Button("保存") {
+                            UserDefaults.standard.set(jiMengAccessKeyId, forKey: "jimeng_access_key_id")
+                            UserDefaults.standard.set(jiMengSecretAccessKey, forKey: "jimeng_secret_access_key")
+                            showSavedToast = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                showSavedToast = false
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(jiMengAccessKeyId.isEmpty || jiMengSecretAccessKey.isEmpty)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("即梦AI 视频生成")
+                } footer: {
+                    Text("即梦AI可根据你的描述和参考视频，生成全新的视频内容。\n\n获取步骤：\n1. 访问 console.volcengine.com\n2. 右上角头像 → API访问密钥\n3. 新建密钥，复制 Access Key ID 和 Secret Access Key")
+                }
+
                 // API 配置
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
@@ -79,9 +124,15 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                     HStack {
-                        Text("模型")
+                        Text("分析模型")
                         Spacer()
                         Text("Qwen VL Max")
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("剪辑模型")
+                        Spacer()
+                        Text("即梦AI")
                             .foregroundColor(.secondary)
                     }
                 }

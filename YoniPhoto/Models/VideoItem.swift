@@ -9,6 +9,12 @@
 import Foundation
 import Photos
 
+// 媒体类型
+enum MediaType: String, Codable {
+    case video = "video"
+    case photo = "photo"
+}
+
 // 视频分析状态
 enum AnalysisStatus: String, Codable {
     case notAnalyzed = "未分析"
@@ -24,6 +30,7 @@ struct VideoItem: Identifiable, Codable {
     let duration: TimeInterval
     let creationDate: Date?
     let modificationDate: Date?
+    let mediaType: MediaType    // 媒体类型：视频或图片
     
     var analysisStatus: AnalysisStatus
     var analysisResult: VideoAnalysisResult?
@@ -41,10 +48,26 @@ struct VideoItem: Identifiable, Codable {
         self.duration = asset.duration
         self.creationDate = asset.creationDate
         self.modificationDate = asset.modificationDate
+        self.mediaType = asset.mediaType == .image ? .photo : .video
         self.analysisStatus = .notAnalyzed
         self.analysisResult = nil
         self.analysisDate = nil
         self.locationName = nil
+    }
+    
+    // 自定义解码，兼容旧数据（旧数据没有 mediaType 字段，默认为 .video）
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        filename = try container.decode(String.self, forKey: .filename)
+        duration = try container.decode(TimeInterval.self, forKey: .duration)
+        creationDate = try container.decodeIfPresent(Date.self, forKey: .creationDate)
+        modificationDate = try container.decodeIfPresent(Date.self, forKey: .modificationDate)
+        mediaType = (try container.decodeIfPresent(MediaType.self, forKey: .mediaType)) ?? .video
+        analysisStatus = try container.decode(AnalysisStatus.self, forKey: .analysisStatus)
+        analysisResult = try container.decodeIfPresent(VideoAnalysisResult.self, forKey: .analysisResult)
+        analysisDate = try container.decodeIfPresent(Date.self, forKey: .analysisDate)
+        locationName = try container.decodeIfPresent(String.self, forKey: .locationName)
     }
 }
 

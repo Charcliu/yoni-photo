@@ -13,7 +13,7 @@ struct MainTabView: View {
         TabView {
             VideoLibraryView()
                 .tabItem {
-                    Label("视频库", systemImage: "film.stack")
+                    Label("图库", systemImage: "photo.stack")
                 }
             
             SearchView()

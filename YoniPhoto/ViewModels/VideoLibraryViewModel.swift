@@ -91,7 +91,7 @@ class VideoLibraryViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        let assets = PhotoLibraryService.shared.fetchAllVideos()
+        let assets = PhotoLibraryService.shared.fetchAllMedia()
         
         var items: [VideoItem] = []
         for asset in assets {
@@ -175,7 +175,7 @@ class VideoLibraryViewModel: ObservableObject {
     
     func analyzeSelectedVideos(skipAnalyzed: Bool = true) {
         guard !selectedVideoIds.isEmpty else {
-            errorMessage = "请先选择要分析的视频"
+            errorMessage = "请先选择要分析的媒体"
             return
         }
         
@@ -189,7 +189,7 @@ class VideoLibraryViewModel: ObservableObject {
         }
         
         if idsToAnalyze.isEmpty {
-            successMessage = "所选视频均已分析完成"
+            successMessage = "所选媒体均已分析完成"
             return
         }
         
@@ -201,7 +201,7 @@ class VideoLibraryViewModel: ObservableObject {
     func analyzeAllUnanalyzed() {
         let unanalyzedIds = allVideos.filter { !$0.isAnalyzed }.map { $0.id }
         guard !unanalyzedIds.isEmpty else {
-            successMessage = "所有视频均已分析完成"
+            successMessage = "所有媒体均已分析完成"
             return
         }
         analysisTask = Task {
@@ -272,7 +272,7 @@ class VideoLibraryViewModel: ObservableObject {
         
         if failed == 0 {
             errorMessage = nil
-            successMessage = "✅ 成功分析 \(completed) 个视频"
+            successMessage = "✅ 成功分析 \(completed) 个媒体"
         } else if completed - failed == 0 {
             // 全部失败：errorMessage 已在 catch 里设置了具体原因，不覆盖
             // 如果 errorMessage 为空（理论上不会），才用兜底文案

@@ -32,27 +32,47 @@ struct VideoDetailView: View {
     @State private var isLoadingPlayer = true
     @State private var rawMetadata: VideoRawMetadata?
     @State private var isLoadingMetadata = true
+    @State private var photoImage: UIImage?   // 图片预览
     
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // 视频播放器
+                // 媒体预览区域
                 ZStack {
                     Color.black
                         .frame(height: 240)
                     
-                    if let player = player {
-                        VideoPlayer(player: player)
-                            .frame(height: 240)
-                    } else if isLoadingPlayer {
-                        ProgressView()
-                            .tint(.white)
-                            .frame(height: 240)
+                    if video.mediaType == .photo {
+                        // 图片预览
+                        if let image = photoImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 240)
+                        } else if isLoadingPlayer {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(height: 240)
+                        }
+                    } else {
+                        // 视频播放器
+                        if let player = player {
+                            VideoPlayer(player: player)
+                                .frame(height: 240)
+                        } else if isLoadingPlayer {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(height: 240)
+                        }
                     }
                 }
                 .frame(height: 240)
                 .onAppear {
-                    loadPlayer()
+                    if video.mediaType == .photo {
+                        loadPhoto()
+                    } else {
+                        loadPlayer()
+                    }
                     loadMetadata()
                 }
                 .onDisappear {
@@ -139,10 +159,10 @@ struct VideoDetailView: View {
                             Image(systemName: "wand.and.stars")
                                 .font(.system(size: 48))
                                 .foregroundColor(.secondary)
-                            Text("该视频尚未分析")
+                            Text(video.mediaType == .photo ? "该图片尚未分析" : "该视频尚未分析")
                                 .font(.headline)
                                 .foregroundColor(.secondary)
-                            Text("返回视频库，选中该视频后点击「分析」")
+                            Text("返回图库，选中该媒体后点击「分析」")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
@@ -159,8 +179,35 @@ struct VideoDetailView: View {
                 .padding(16)
             }
         }
-        .navigationTitle("视频详情")
+        .navigationTitle(video.mediaType == .photo ? "图片详情" : "视频详情")
         .navigationBarTitleDisplayMode(.inline)
+    }
+    
+    // MARK: - 加载图片
+    
+    private func loadPhoto() {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [video.id], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            isLoadingPlayer = false
+            return
+        }
+        
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.isSynchronous = false
+        
+        PHImageManager.default().requestImage(
+            for: asset,
+            targetSize: CGSize(width: 1024, height: 1024),
+            contentMode: .aspectFit,
+            options: options
+        ) { image, _ in
+            DispatchQueue.main.async {
+                self.photoImage = image
+                self.isLoadingPlayer = false
+            }
+        }
     }
     
     // MARK: - 私有方法
@@ -210,12 +257,14 @@ struct VideoDetailView: View {
                         )
                     }
                     
-                    // 视频时长
-                    DetailRow(
-                        label: "时长",
-                        value: formatDuration(video.duration),
-                        icon: "clock"
-                    )
+                    // 视频时长（仅视频显示）
+                    if video.mediaType == .video {
+                        DetailRow(
+                            label: "时长",
+                            value: formatDuration(video.duration),
+                            icon: "clock"
+                        )
+                    }
                     
                     // 拍摄地点
                     if let locationName = rawMetadata?.locationName {
@@ -287,8 +336,15 @@ struct VideoDetailView: View {
                 }
             }
         } else {
-            // 无位置信息，直接读取 AVAsset metadata
-            loadAVMetadata(asset: asset, metadata: metadata)
+            // 无位置信息
+            if video.mediaType == .video {
+                // 视频：读取 AVAsset metadata
+                loadAVMetadata(asset: asset, metadata: metadata)
+            } else {
+                // 图片：直接完成
+                rawMetadata = metadata
+                isLoadingMetadata = false
+            }
         }
     }
     

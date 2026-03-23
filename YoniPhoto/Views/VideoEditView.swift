@@ -10,6 +10,20 @@ import SwiftUI
 import AVKit
 import Photos
 
+// MARK: - 剪辑模式
+
+enum EditMode: String, CaseIterable {
+    case traditional = "传统剪辑"
+    case jiMeng = "即梦AI生成"
+
+    var icon: String {
+        switch self {
+        case .traditional: return "scissors"
+        case .jiMeng: return "sparkles"
+        }
+    }
+}
+
 // MARK: - 剪辑状态
 
 enum EditState: Equatable {
@@ -19,6 +33,8 @@ enum EditState: Equatable {
     case composing(Double)          // 合成中
     case exporting(Double)          // 导出中
     case preview(URL, EditScript)   // 预览
+    case jiMengGenerating(Double)   // 即梦AI生成中
+    case jiMengPreview(URL)         // 即梦AI预览
     case saving                     // 保存中
     case saved                      // 已保存
     case failed(String)             // 失败
@@ -31,6 +47,8 @@ enum EditState: Equatable {
         case (.composing(let a), .composing(let b)): return a == b
         case (.exporting(let a), .exporting(let b)): return a == b
         case (.preview(let a, _), .preview(let b, _)): return a == b
+        case (.jiMengGenerating(let a), .jiMengGenerating(let b)): return a == b
+        case (.jiMengPreview(let a), .jiMengPreview(let b)): return a == b
         case (.failed(let a), .failed(let b)): return a == b
         default: return false
         }
@@ -50,7 +68,8 @@ struct VideoEditView: View {
     @State private var showScriptDetail = false
     @State private var saveSuccessMessage: String? = nil
     @State private var videoAspectRatio: CGFloat = 9/16  // 默认竖版
-    
+    @State private var editMode: EditMode = .jiMeng  // 默认使用即梦AI
+
     // 剪辑想法输入
     @State private var userIdea: String = ""
     @FocusState private var ideaFieldFocused: Bool
@@ -65,8 +84,12 @@ struct VideoEditView: View {
                     inputIdeaView
                 case .generatingScript, .loadingAssets, .composing, .exporting:
                     progressView
+                case .jiMengGenerating:
+                    jiMengProgressView
                 case .preview(let url, let script):
                     previewView(url: url, script: script)
+                case .jiMengPreview(let url):
+                    jiMengPreviewView(url: url)
                 case .saving:
                     savingView
                 case .saved:
@@ -104,25 +127,50 @@ struct VideoEditView: View {
     private var inputIdeaView: some View {
         ScrollView {
             VStack(spacing: 24) {
+                // 模式切换
+                VStack(spacing: 12) {
+                    Picker("剪辑模式", selection: $editMode) {
+                        ForEach(EditMode.allCases, id: \.self) { mode in
+                            Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+
+                    // 模式说明
+                    HStack(spacing: 8) {
+                        Image(systemName: editMode == .jiMeng ? "sparkles" : "scissors")
+                            .foregroundColor(.purple)
+                        Text(editMode == .jiMeng
+                             ? "即梦AI将根据参考视频和描述，生成全新的视频画面"
+                             : "AI分析视频内容，智能剪辑拼接你的素材")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.top, 8)
+
                 // 顶部图标
                 VStack(spacing: 12) {
                     ZStack {
                         Circle()
                             .fill(Color.purple.opacity(0.1))
                             .frame(width: 80, height: 80)
-                        Image(systemName: "scissors")
+                        Image(systemName: editMode == .jiMeng ? "sparkles" : "scissors")
                             .font(.system(size: 36))
                             .foregroundColor(.purple)
                     }
-                    Text("告诉 AI 你的剪辑想法")
+                    Text(editMode == .jiMeng ? "即梦AI 生成视频" : "告诉 AI 你的剪辑想法")
                         .font(.title3)
                         .fontWeight(.bold)
-                    Text("AI 将根据你的描述和视频内容，自动生成剪辑方案")
+                    Text(editMode == .jiMeng
+                         ? "AI将根据你的描述和参考视频，生成全新的视频内容"
+                         : "AI 将根据你的描述和视频内容，自动生成剪辑方案")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }
-                .padding(.top, 8)
 
                 // 输入框
                 VStack(alignment: .leading, spacing: 8) {
@@ -197,14 +245,18 @@ struct VideoEditView: View {
                     }
                 }
 
-                // 开始剪辑按钮
+                // 开始按钮
                 Button {
                     ideaFieldFocused = false
-                    startEditing(idea: userIdea)
+                    if editMode == .jiMeng {
+                        startJiMengGeneration(description: userIdea)
+                    } else {
+                        startEditing(idea: userIdea)
+                    }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "wand.and.stars")
-                        Text("开始 AI 剪辑")
+                        Image(systemName: editMode == .jiMeng ? "sparkles" : "wand.and.stars")
+                        Text(editMode == .jiMeng ? "即梦AI 生成视频" : "开始 AI 剪辑")
                     }
                     .font(.headline)
                     .frame(maxWidth: .infinity)
@@ -232,6 +284,72 @@ struct VideoEditView: View {
         "突出最精彩片段",
         "按时间顺序剪辑"
     ]
+
+    // MARK: - 即梦AI生成
+
+    private func startJiMengGeneration(description: String) {
+        editState = .jiMengGenerating(0)
+        Task {
+            do {
+                let url = try await JiMengService.shared.generateVideo(
+                    from: selectedVideos,
+                    description: description.trimmingCharacters(in: .whitespacesAndNewlines)
+                ) { progress in
+                    DispatchQueue.main.async {
+                        switch progress {
+                        case .extractingFrames:
+                            editState = .jiMengGenerating(0.05)
+                        case .uploadingImage:
+                            editState = .jiMengGenerating(0.1)
+                        case .submitting:
+                            editState = .jiMengGenerating(0.15)
+                        case .generating(let p):
+                            editState = .jiMengGenerating(0.15 + p * 0.75)
+                        case .downloading:
+                            editState = .jiMengGenerating(0.95)
+                        case .done(let url):
+                            outputURL = url
+                            let newPlayer = AVPlayer(url: url)
+                            newPlayer.actionAtItemEnd = .none
+                            NotificationCenter.default.addObserver(
+                                forName: .AVPlayerItemDidPlayToEndTime,
+                                object: newPlayer.currentItem,
+                                queue: .main,
+                                using: { _ in
+                                    newPlayer.seek(to: .zero)
+                                    newPlayer.play()
+                                }
+                            )
+                            player = newPlayer
+                        case .failed(let msg):
+                            editState = .failed(msg)
+                        }
+                    }
+                }
+                // 读取视频宽高比
+                let asset = AVAsset(url: url)
+                if let track = try? await asset.loadTracks(withMediaType: .video).first {
+                    let size = try? await track.load(.naturalSize)
+                    let transform = try? await track.load(.preferredTransform)
+                    if let size = size, let transform = transform {
+                        let transformed = size.applying(transform)
+                        let w = abs(transformed.width)
+                        let h = abs(transformed.height)
+                        await MainActor.run {
+                            if w > 0 && h > 0 { videoAspectRatio = w / h }
+                            editState = .jiMengPreview(url)
+                        }
+                        return
+                    }
+                }
+                await MainActor.run { editState = .jiMengPreview(url) }
+            } catch {
+                await MainActor.run {
+                    editState = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
 
     // MARK: - 开始剪辑
 
@@ -263,11 +381,12 @@ struct VideoEditView: View {
                             NotificationCenter.default.addObserver(
                                 forName: .AVPlayerItemDidPlayToEndTime,
                                 object: newPlayer.currentItem,
-                                queue: .main
-                            ) { _ in
-                                newPlayer.seek(to: .zero)
-                                newPlayer.play()
-                            }
+                                queue: .main,
+                                using: { _ in
+                                    newPlayer.seek(to: .zero)
+                                    newPlayer.play()
+                                }
+                            )
                             player = newPlayer
                         case .failed(let msg):
                             editState = .failed(msg)
@@ -325,6 +444,145 @@ struct VideoEditView: View {
                     editState = .failed("保存失败: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    // MARK: - 即梦AI进度视图
+
+    private var jiMengProgressView: some View {
+        VStack(spacing: 32) {
+            Spacer()
+            ZStack {
+                Circle()
+                    .fill(Color.purple.opacity(0.1))
+                    .frame(width: 100, height: 100)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 44))
+                    .foregroundColor(.purple)
+                    .symbolEffect(.pulse)
+            }
+            VStack(spacing: 8) {
+                Text(jiMengProgressTitle)
+                    .font(.title3).fontWeight(.semibold)
+                Text(jiMengProgressSubtitle)
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if case .jiMengGenerating(let p) = editState {
+                VStack(spacing: 6) {
+                    ProgressView(value: p)
+                        .progressViewStyle(.linear)
+                        .tint(.purple)
+                        .frame(maxWidth: 280)
+                    Text("\(Int(p * 100))%")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            Text("即梦AI正在创作，通常需要1~3分钟")
+                .font(.caption).foregroundColor(.secondary)
+            selectedVideosSummary
+            Spacer()
+        }
+        .padding(24)
+    }
+
+    private var jiMengProgressTitle: String {
+        guard case .jiMengGenerating(let p) = editState else { return "即梦AI 生成中..." }
+        if p < 0.1 { return "提取视频关键帧..." }
+        if p < 0.15 { return "上传参考素材..." }
+        if p < 0.2 { return "提交生成任务..." }
+        return "即梦AI 创作中..."
+    }
+
+    private var jiMengProgressSubtitle: String {
+        let desc = userIdea.trimmingCharacters(in: .whitespacesAndNewlines)
+        if desc.isEmpty {
+            return "AI正在根据参考视频生成新的视频内容"
+        } else {
+            return "正在根据「\(desc.prefix(20))」生成视频"
+        }
+    }
+
+    // MARK: - 即梦AI预览视图
+
+    private func jiMengPreviewView(url: URL) -> some View {
+        VStack(spacing: 0) {
+            if let player = player {
+                VideoPlayer(player: player)
+                    .aspectRatio(videoAspectRatio, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .onAppear { player.play() }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.purple)
+                        Text("即梦AI 生成完成")
+                            .font(.title3).fontWeight(.bold)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
+                    let desc = userIdea.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !desc.isEmpty {
+                        Text("生成描述：\(desc)")
+                            .font(.subheadline).foregroundColor(.secondary)
+                            .padding(.horizontal, 16)
+                    }
+
+                    Text("参考素材：\(selectedVideos.count) 段视频")
+                        .font(.caption).foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                }
+                .padding(.bottom, 100)
+            }
+            Spacer()
+        }
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 12) {
+                Button {
+                    player?.pause()
+                    editState = .inputIdea
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("重新生成")
+                    }
+                    .font(.subheadline).fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .foregroundColor(.primary)
+
+                Button { saveToAlbum() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("保存到相册")
+                    }
+                    .font(.subheadline).fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.purple)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .foregroundColor(.white)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
+            .background(
+                LinearGradient(
+                    colors: [Color(.systemGroupedBackground).opacity(0), Color(.systemGroupedBackground)],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: 100)
+                .allowsHitTesting(false),
+                alignment: .top
+            )
         }
     }
 
@@ -596,7 +854,8 @@ struct VideoEditView: View {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 56)).foregroundColor(.red)
             }
-            Text("剪辑失败").font(.title2).fontWeight(.bold)
+            Text(editMode == .jiMeng ? "生成失败" : "剪辑失败")
+                .font(.title2).fontWeight(.bold)
             Text(message)
                 .font(.subheadline).foregroundColor(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 32)

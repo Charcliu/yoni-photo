@@ -35,7 +35,7 @@ class PhotoLibraryService: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - 获取视频列表
+    // MARK: - 获取媒体列表
     
     func fetchAllVideos() -> [PHAsset] {
         let options = PHFetchOptions()
@@ -43,6 +43,23 @@ class PhotoLibraryService: NSObject, ObservableObject {
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.video.rawValue)
         
         let result = PHAsset.fetchAssets(with: .video, options: options)
+        var assets: [PHAsset] = []
+        result.enumerateObjects { asset, _, _ in
+            assets.append(asset)
+        }
+        return assets
+    }
+    
+    /// 获取所有媒体（图片 + 视频），按拍摄时间倒序
+    func fetchAllMedia() -> [PHAsset] {
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.predicate = NSPredicate(
+            format: "mediaType == %d OR mediaType == %d",
+            PHAssetMediaType.image.rawValue,
+            PHAssetMediaType.video.rawValue
+        )
+        let result = PHAsset.fetchAssets(with: options)
         var assets: [PHAsset] = []
         result.enumerateObjects { asset, _, _ in
             assets.append(asset)
@@ -89,6 +106,32 @@ class PhotoLibraryService: NSObject, ObservableObject {
                     continuation.resume(returning: urlAsset.url)
                 } else {
                     continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+    
+    // MARK: - 图片帧提取（用于AI分析）
+    
+    /// 提取图片资源的图像（直接返回原图，用于AI分析）
+    func extractPhotoImage(from asset: PHAsset) async -> [UIImage] {
+        return await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.resizeMode = .exact
+            options.isSynchronous = false
+            
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 1024, height: 1024),
+                contentMode: .aspectFit,
+                options: options
+            ) { image, _ in
+                if let image = image {
+                    continuation.resume(returning: [image])
+                } else {
+                    continuation.resume(returning: [])
                 }
             }
         }
